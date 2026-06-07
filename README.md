@@ -25,7 +25,7 @@ Open a terminal in your ComfyUI `custom_nodes` directory:
 
 ```bash
 cd /path/to/ComfyUI/custom_nodes
-git clone https://github.com/YOUR_USERNAME/ComfyUI-EasyImageNodes.git
+git clone https://github.com/mengod-gh/ComfyUI-Easy-Image-Nodes.git
 ```
 
 Restart ComfyUI after installation.
@@ -163,6 +163,10 @@ output/cleaned/dataset/sample1.png
 output/cleaned/dataset/sample2.png
 ```
 
+### License
+
+MIT License. See [LICENSE](LICENSE).
+
 ## 한국어
 
 ### 주요 기능
@@ -182,7 +186,7 @@ ComfyUI의 `custom_nodes` 폴더에서 터미널을 엽니다:
 
 ```bash
 cd /path/to/ComfyUI/custom_nodes
-git clone https://github.com/YOUR_USERNAME/ComfyUI-EasyImageNodes.git
+git clone https://github.com/mengod-gh/ComfyUI-Easy-Image-Nodes.git
 ```
 
 설치 후 ComfyUI를 재시작하세요.
@@ -320,6 +324,10 @@ output/cleaned/dataset/sample1.png
 output/cleaned/dataset/sample2.png
 ```
 
+### 라이선스
+
+MIT 라이선스입니다. 자세한 내용은 [LICENSE](LICENSE)를 확인하세요.
+
 ## 日本語
 
 ### 主な機能
@@ -339,7 +347,7 @@ ComfyUI の `custom_nodes` ディレクトリでターミナルを開きます:
 
 ```bash
 cd /path/to/ComfyUI/custom_nodes
-git clone https://github.com/YOUR_USERNAME/ComfyUI-EasyImageNodes.git
+git clone https://github.com/mengod-gh/ComfyUI-Easy-Image-Nodes.git
 ```
 
 インストール後、ComfyUI を再起動してください。
@@ -477,6 +485,10 @@ output/cleaned/dataset/sample1.png
 output/cleaned/dataset/sample2.png
 ```
 
+### ライセンス
+
+MIT ライセンスです。詳細は [LICENSE](LICENSE) を確認してください。
+
 ## 中文
 
 ### 主要功能
@@ -496,7 +508,7 @@ output/cleaned/dataset/sample2.png
 
 ```bash
 cd /path/to/ComfyUI/custom_nodes
-git clone https://github.com/YOUR_USERNAME/ComfyUI-EasyImageNodes.git
+git clone https://github.com/mengod-gh/ComfyUI-Easy-Image-Nodes.git
 ```
 
 安装后重启 ComfyUI。
@@ -633,3 +645,7 @@ output/dataset/sample2.png
 output/cleaned/dataset/sample1.png
 output/cleaned/dataset/sample2.png
 ```
+
+### 许可证
+
+MIT 许可证。详情请参阅 [LICENSE](LICENSE)。
