@@ -391,7 +391,7 @@ def _image_to_pil(image: torch.Tensor, mask: torch.Tensor | None) -> Image.Image
     return Image.fromarray(rgb, "RGB")
 
 
-def _save_pil_image(img: Image.Image, path: Path, prompt=None, extra_pnginfo=None) -> None:
+def _save_pil_image(img: Image.Image, path: Path, prompt=None, extra_pnginfo=None, parameters: str = "") -> None:
     ext = path.suffix.lower()
     if ext not in SAVE_EXTENSIONS:
         raise RuntimeError(f"Unsupported output extension: {path.suffix or '(none)'}")
@@ -401,6 +401,8 @@ def _save_pil_image(img: Image.Image, path: Path, prompt=None, extra_pnginfo=Non
         metadata = None
         if not args.disable_metadata:
             metadata = PngInfo()
+            if parameters:
+                metadata.add_text("parameters", parameters)
             if prompt is not None:
                 metadata.add_text("prompt", json.dumps(prompt))
             if extra_pnginfo is not None:
@@ -413,6 +415,16 @@ def _save_pil_image(img: Image.Image, path: Path, prompt=None, extra_pnginfo=Non
         img.save(path, format="WEBP", lossless=True, quality=100, method=6, exact=True)
     else:
         raise RuntimeError(f"Unsupported output extension: {path.suffix or '(none)'}")
+
+
+def _format_a1111_parameters(positive: str | None, negative: str | None) -> str:
+    positive = str(positive or "").strip()
+    negative = str(negative or "").strip()
+    if positive and negative:
+        return f"{positive}\nNegative prompt: {negative}"
+    if negative:
+        return f"Negative prompt: {negative}"
+    return positive
 
 
 def _requeue_next(job: dict) -> None:
@@ -631,6 +643,8 @@ class EasyImageNodesSaveImage:
                 "path": ("STRING", {"default": "", "multiline": False}),
             },
             "optional": {
+                "positive": ("STRING", {"default": "", "multiline": True}),
+                "negative": ("STRING", {"default": "", "multiline": True}),
                 "extension": ("STRING", {"forceInput": True}),
                 "mask": ("MASK",),
                 "job": ("EASY_IMAGE_JOB",),
@@ -654,6 +668,8 @@ class EasyImageNodesSaveImage:
         extension_select: str,
         path_enabled: bool,
         path: str,
+        positive: str = "",
+        negative: str = "",
         extension: str | None = None,
         mask: torch.Tensor | None = None,
         job: dict | None = None,
@@ -692,7 +708,14 @@ class EasyImageNodesSaveImage:
             raise RuntimeError(f"Output path escapes the ComfyUI output directory: {relative_output}")
 
         pil_image = _image_to_pil(images[0], mask)
-        _save_pil_image(pil_image, output_path, prompt=prompt, extra_pnginfo=extra_pnginfo)
+        parameters = _format_a1111_parameters(positive, negative)
+        _save_pil_image(
+            pil_image,
+            output_path,
+            prompt=prompt,
+            extra_pnginfo=extra_pnginfo,
+            parameters=parameters,
+        )
 
         subfolder = output_path.parent.relative_to(self.output_dir).as_posix()
         if subfolder == ".":
