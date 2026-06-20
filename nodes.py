@@ -391,7 +391,14 @@ def _image_to_pil(image: torch.Tensor, mask: torch.Tensor | None) -> Image.Image
     return Image.fromarray(rgb, "RGB")
 
 
-def _save_pil_image(img: Image.Image, path: Path, prompt=None, extra_pnginfo=None, parameters: str = "") -> None:
+def _save_pil_image(
+    img: Image.Image,
+    path: Path,
+    prompt=None,
+    extra_pnginfo=None,
+    parameters: str = "",
+    metadata_enabled: bool = True,
+) -> None:
     ext = path.suffix.lower()
     if ext not in SAVE_EXTENSIONS:
         raise RuntimeError(f"Unsupported output extension: {path.suffix or '(none)'}")
@@ -399,7 +406,7 @@ def _save_pil_image(img: Image.Image, path: Path, prompt=None, extra_pnginfo=Non
     path.parent.mkdir(parents=True, exist_ok=True)
     if ext == ".png":
         metadata = None
-        if not args.disable_metadata:
+        if metadata_enabled and not args.disable_metadata:
             metadata = PngInfo()
             if parameters:
                 metadata.add_text("parameters", parameters)
@@ -643,6 +650,7 @@ class EasyImageNodesSaveImage:
                 "path": ("STRING", {"default": "", "multiline": False}),
             },
             "optional": {
+                "exif_enabled": ("BOOLEAN", {"default": True}),
                 "positive": ("STRING", {"default": "", "multiline": True}),
                 "negative": ("STRING", {"default": "", "multiline": True}),
                 "extension": ("STRING", {"forceInput": True}),
@@ -668,6 +676,7 @@ class EasyImageNodesSaveImage:
         extension_select: str,
         path_enabled: bool,
         path: str,
+        exif_enabled: bool = True,
         positive: str = "",
         negative: str = "",
         extension: str | None = None,
@@ -715,6 +724,7 @@ class EasyImageNodesSaveImage:
             prompt=prompt,
             extra_pnginfo=extra_pnginfo,
             parameters=parameters,
+            metadata_enabled=exif_enabled,
         )
 
         subfolder = output_path.parent.relative_to(self.output_dir).as_posix()
