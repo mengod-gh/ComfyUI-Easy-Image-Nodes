@@ -21,12 +21,12 @@ cd /path/to/ComfyUI/custom_nodes
 git clone https://github.com/mengod-gh/ComfyUI-Easy-Image-Nodes.git
 ```
 
-Restart ComfyUI after installation.
+Restart ComfyUI after installation.  
 This has only been tested with ComfyUI Portable.
 
 ### Node: Easy Load Image
 
-Loads a single image.
+Loads a single image.  
 Uploaded images are automatically copied to the `input` folder in your ComfyUI Portable installation.
 
 #### Inputs
@@ -46,7 +46,7 @@ Uploaded images are automatically copied to the `input` folder in your ComfyUI P
 
 ### Node: Easy Load Images From Folder
 
-Loads all images in a folder in order.
+Loads all images in a folder in order.  
 Use `choose folder to upload` to upload an entire folder to `input`, or enter an absolute path in `folder` to load it directly. Subfolders are detected automatically.
 
 #### Inputs
@@ -70,13 +70,12 @@ Use `choose folder to upload` to upload an entire folder to `input`, or enter an
 | `relative_path` | Path relative to the uploaded folder. The selected top-level folder name is omitted, and subfolders are preserved when saving under `output`. |
 | `job` | Internal job data used by Easy Save Image for `auto_requeue`. |
 
-To process the whole folder, enable `auto_requeue`, connect `job` to Easy Save Image, and leave `start_index` and `max_images` at `0`. Queue once; each successful save queues the next image until the folder ends. Connecting `job` alone does not enable looping.
-
+To process the whole folder, enable `auto_requeue`, connect `job` to Easy Save Image, and leave `start_index` and `max_images` at `0`. Queue once; each successful save queues the next image until the folder ends. Connecting `job` alone does not enable looping.  
 Connect `relative_path` to Easy Save Image's `filename` input to preserve the uploaded folder's structure under `output`. If you specify a `path` in Easy Save Image, the same structure is saved under `output/<specified path>/`.
 
 ### Node: Easy Save Image
 
-Saves images to the ComfyUI `output` folder.
+Saves images to the ComfyUI `output` folder.  
 Both `filename` and `path` support ComfyUI's standard filename formatting.
 
 #### Inputs
