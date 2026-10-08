@@ -124,9 +124,18 @@ function addImagePreview(node, imageWidget) {
   img.draggable = false;
   container.appendChild(img);
 
+  function previewHeight() {
+    if (img.style.display === "none" || !img.naturalWidth || !img.naturalHeight) {
+      return 0;
+    }
+    return Math.max(80, (node.size[0] - 20) * (img.naturalHeight / img.naturalWidth) + 10);
+  }
+
   const previewWidget = node.addDOMWidget("easy_image_preview", "preview", container, {
     serialize: false,
     hideOnZoom: false,
+    getMinHeight: previewHeight,
+    getMaxHeight: previewHeight,
     getValue() {
       return imageWidget.value;
     },
@@ -136,10 +145,7 @@ function addImagePreview(node, imageWidget) {
   });
 
   previewWidget.computeSize = function (width) {
-    if (img.style.display === "none" || !img.naturalWidth || !img.naturalHeight) {
-      return [width, -4];
-    }
-    return [width, Math.max(80, (node.size[0] - 20) * (img.naturalHeight / img.naturalWidth) + 10)];
+    return [width, previewHeight() || -4];
   };
 
   function updatePreview(value) {
@@ -218,6 +224,7 @@ function addFolderUpload(node) {
 
   const fileInput = document.createElement("input");
   fileInput.type = "file";
+  const supportsFolderUpload = "webkitdirectory" in fileInput;
   fileInput.webkitdirectory = true;
   fileInput.multiple = true;
   fileInput.style.display = "none";
@@ -225,6 +232,10 @@ function addFolderUpload(node) {
 
   chainCallback(node, "onRemoved", () => fileInput.remove());
   addButton(node, "choose folder to upload", () => {
+    if (!supportsFolderUpload) {
+      alert("This browser does not support folder uploads. Enter a folder path on the ComfyUI server, or use a browser with folder upload support.");
+      return;
+    }
     fileInput.value = "";
     fileInput.click();
   });
@@ -267,11 +278,38 @@ function isEasySaveImageNode(node) {
   return (node?.comfyClass || node?.type) === "EasyImageNodes_SaveImage";
 }
 
-function pruneSaveImageOutputs(node) {
-  if (!isEasySaveImageNode(node) || !node.outputs?.length) {
+function migrateFolderOutputs(node) {
+  if ((node?.comfyClass || node?.type) !== "EasyImageNodes_LoadImagesFromFolder") {
     return;
   }
-  for (let index = node.outputs.length - 1; index >= 0; index -= 1) {
+  const stemIndex = node.outputs?.findIndex((output) => output.name === "stem") ?? -1;
+  if (stemIndex >= 0) {
+    const filenameIndex = node.outputs.findIndex((output) => output.name === "filename");
+    const stem = node.outputs[stemIndex];
+    for (const linkId of [...(stem.links || [])]) {
+      const link = node.graph.links[linkId];
+      if (link) {
+        node.connect(filenameIndex, node.graph.getNodeById(link.target_id), link.target_slot);
+      }
+    }
+    node.removeOutput(stemIndex);
+  }
+  for (let index = (node.outputs?.length || 0) - 1; index >= 0; index -= 1) {
+    if (["index", "total"].includes(node.outputs[index].name)) {
+      node.removeOutput(index);
+    }
+  }
+}
+
+function migrateSaveImageSlots(node) {
+  if (!isEasySaveImageNode(node)) {
+    return;
+  }
+  const pathEnabledIndex = node.inputs?.findIndex((input) => input.name === "path_enabled") ?? -1;
+  if (pathEnabledIndex >= 0) {
+    node.removeInput(pathEnabledIndex);
+  }
+  for (let index = (node.outputs?.length || 0) - 1; index >= 0; index -= 1) {
     if (typeof node.removeOutput === "function") {
       node.removeOutput(index);
     } else {
@@ -292,20 +330,35 @@ app.registerExtension({
 
     if (nodeData?.name === "EasyImageNodes_LoadImagesFromFolder") {
       chainCallback(nodeType.prototype, "onNodeCreated", function () {
+        const currentIndexWidget = getWidget(this, "current_index");
+        if (currentIndexWidget) {
+          currentIndexWidget.hidden = true;
+          currentIndexWidget.type = "converted-widget";
+          currentIndexWidget.computeSize = () => [0, -4];
+        }
         addFolderUpload(this);
       });
     }
 
     if (nodeData?.name === "EasyImageNodes_SaveImage") {
       chainCallback(nodeType.prototype, "onNodeCreated", function () {
-        pruneSaveImageOutputs(this);
+        migrateSaveImageSlots(this);
       });
-      chainCallback(nodeType.prototype, "configure", function () {
-        pruneSaveImageOutputs(this);
-      });
+      const configure = nodeType.prototype.configure;
+      nodeType.prototype.configure = function (info, ...args) {
+        if (Array.isArray(info.widgets_values) && typeof info.widgets_values[2] === "boolean") {
+          const widgetsValues = [...info.widgets_values];
+          widgetsValues.splice(2, 1);
+          info = { ...info, widgets_values: widgetsValues };
+        }
+        const result = configure?.call(this, info, ...args);
+        migrateSaveImageSlots(this);
+        return result;
+      };
     }
   },
   loadedGraphNode(node) {
-    pruneSaveImageOutputs(node);
+    migrateFolderOutputs(node);
+    migrateSaveImageSlots(node);
   },
 });

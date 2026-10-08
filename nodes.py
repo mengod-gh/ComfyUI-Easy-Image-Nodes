@@ -3,7 +3,6 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
-import os
 import re
 import time
 import uuid
@@ -35,9 +34,24 @@ def _as_input_path(relative_path: str) -> Path:
     path = _clean_relative_path(relative_path, "input path")
     base = Path(folder_paths.get_input_directory()).resolve()
     full_path = (base / path).resolve()
-    if os.path.commonpath((str(base), str(full_path))) != str(base):
+    if not full_path.is_relative_to(base):
         raise RuntimeError(f"Input path escapes the ComfyUI input directory: {relative_path}")
     return full_path
+
+
+def _as_folder_path(folder: str) -> Path:
+    folder = str(folder or "").strip().replace("\\", "/")
+    path = Path(folder).expanduser()
+    if path.is_absolute():
+        return path.resolve()
+    return _as_input_path(_clean_relative_path(folder, "folder"))
+
+
+def _as_folder_image_path(root: Path, relative_path: str) -> Path:
+    path = (root / relative_path).resolve()
+    if not path.is_relative_to(root):
+        raise RuntimeError(f"Image path escapes the selected folder: {relative_path}")
+    return path
 
 
 def _clean_relative_path(value: str, label: str) -> str:
@@ -134,16 +148,26 @@ def _prompt_node_labels(node_id, node: dict) -> set[str]:
     return labels
 
 
-def _prompt_input_value(prompt, node_name: str, input_name: str):
+def _prompt_input_value(prompt, node_name: str, input_name: str, extra_pnginfo=None):
     if not isinstance(prompt, dict):
         return None
 
     target_node = _normalize_token_name(node_name)
     target_input = _normalize_token_name(input_name)
+    workflow = extra_pnginfo.get("workflow", {}) if isinstance(extra_pnginfo, dict) else {}
+    alias_node_ids = {
+        str(node["id"])
+        for node in workflow.get("nodes", [])
+        if _normalize_token_name(node.get("properties", {}).get("Node name for S&R")) == target_node
+    }
     for node_id, node in prompt.items():
         if not isinstance(node, dict):
             continue
-        if target_node not in _prompt_node_labels(node_id, node):
+        if alias_node_ids:
+            matches = str(node_id) in alias_node_ids
+        else:
+            matches = target_node in _prompt_node_labels(node_id, node)
+        if not matches:
             continue
 
         inputs = node.get("inputs", {})
@@ -181,7 +205,7 @@ def _comfy_date_to_strftime(date_format: str) -> str:
     return output
 
 
-def _expand_filename_format(value: str, image_width: int, image_height: int, prompt=None) -> str:
+def _expand_filename_format(value: str, image_width: int, image_height: int, prompt=None, extra_pnginfo=None) -> str:
     def replace_date(match: re.Match) -> str:
         return time.strftime(_comfy_date_to_strftime(match.group(1)), time.localtime())
 
@@ -205,16 +229,15 @@ def _expand_filename_format(value: str, image_width: int, image_height: int, pro
 
         if "." in token:
             node_name, input_name = token.rsplit(".", 1)
-            value = _prompt_input_value(prompt, node_name, input_name)
+            value = _prompt_input_value(prompt, node_name, input_name, extra_pnginfo)
             if value is not None:
-                return _format_prompt_value(value)
+                return re.sub(r'[/?<>\\:*|"\x00-\x1f\x7f]', "_", _format_prompt_value(value))
         return match.group(0)
 
     return FORMAT_TOKEN_RE.sub(replace_token, value)
 
 
-def _clean_optional_filename_prefix(value: str, image_width: int, image_height: int, prompt=None) -> str:
-    value = _expand_filename_format(value, image_width, image_height, prompt)
+def _clean_optional_filename_prefix(value: str) -> str:
     value = str(value or "").strip().replace("\\", "/")
     if not value:
         return ""
@@ -251,12 +274,9 @@ def _auto_increment_relative_path(
     filename_prefix: str,
     extension: str,
     output_dir: Path,
-    image_width: int,
-    image_height: int,
-    prompt=None,
 ) -> str:
     suffix = SAVE_FORMATS[_normalize_save_format(extension)]
-    clean_prefix = _clean_optional_filename_prefix(filename_prefix, image_width, image_height, prompt)
+    clean_prefix = _clean_optional_filename_prefix(filename_prefix)
 
     subfolder = ""
     stem = ""
@@ -269,7 +289,7 @@ def _auto_increment_relative_path(
             stem = stem[: -len(PurePosixPath(stem).suffix)]
 
     target_folder = (output_dir / subfolder).resolve()
-    if os.path.commonpath((str(output_dir), str(target_folder))) != str(output_dir):
+    if not target_folder.is_relative_to(output_dir):
         raise RuntimeError(f"Output path escapes the ComfyUI output directory: {clean_prefix}")
 
     counter = _next_auto_counter(target_folder, stem, suffix)
@@ -288,18 +308,16 @@ def _auto_increment_relative_path(
 def _replace_path_extension(relative_path: str, extension: str) -> str:
     suffix = SAVE_FORMATS[_normalize_save_format(extension)]
     path = PurePosixPath(_clean_relative_path(relative_path, "filename"))
-    if path.suffix:
+    if path.suffix.lower() in IMAGE_EXTENSIONS:
         path = path.with_suffix(suffix)
     else:
         path = PurePosixPath(f"{path.as_posix()}{suffix}")
     return path.as_posix()
 
 
-def _list_input_images(folder: str, sort_order: str = "ascending") -> list[str]:
-    folder = _clean_relative_path(folder, "folder")
-    root = _as_input_path(folder)
+def _list_folder_images(root: Path, sort_order: str = "ascending") -> list[str]:
     if not root.is_dir():
-        raise RuntimeError(f"Folder does not exist under ComfyUI input: {folder}")
+        raise RuntimeError(f"Folder does not exist: {root}")
 
     files: list[str] = []
     for path in root.rglob("*"):
@@ -307,33 +325,33 @@ def _list_input_images(folder: str, sort_order: str = "ascending") -> list[str]:
             files.append(path.relative_to(root).as_posix())
     files.sort(key=lambda item: item.casefold(), reverse=_normalize_sort_order(sort_order) == "descending")
     if not files:
-        raise RuntimeError(f"No supported images found in input folder: {folder}")
+        raise RuntimeError(f"No supported images found in folder: {root}")
     return files
 
 
 def _load_image_tensor(path: Path) -> tuple[torch.Tensor, torch.Tensor]:
-    dtype = comfy.model_management.intermediate_dtype()
+    dtype = comfy.model_management.intermediate_dtype() if hasattr(comfy.model_management, "intermediate_dtype") else torch.float32
     device = comfy.model_management.intermediate_device()
 
-    img = Image.open(path)
     output_images = []
     output_masks = []
     width = height = None
 
-    for frame in ImageSequence.Iterator(img):
-        frame = ImageOps.exif_transpose(frame)
-        rgba = frame.convert("RGBA")
+    with Image.open(path) as img:
+        for frame in ImageSequence.Iterator(img):
+            frame = ImageOps.exif_transpose(frame)
+            rgba = frame.convert("RGBA")
 
-        if width is None or height is None:
-            width, height = rgba.size
-        if rgba.size != (width, height):
-            continue
+            if width is None or height is None:
+                width, height = rgba.size
+            if rgba.size != (width, height):
+                continue
 
-        arr = np.asarray(rgba).astype(np.float32) / 255.0
-        rgb = torch.from_numpy(arr[..., :3])[None,]
-        alpha_mask = 1.0 - torch.from_numpy(arr[..., 3])[None,]
-        output_images.append(rgb.to(dtype=dtype))
-        output_masks.append(alpha_mask.to(dtype=dtype))
+            arr = np.asarray(rgba).astype(np.float32) / 255.0
+            rgb = torch.from_numpy(arr[..., :3])[None,]
+            alpha_mask = 1.0 - torch.from_numpy(arr[..., 3])[None,]
+            output_images.append(rgb.to(dtype=dtype))
+            output_masks.append(alpha_mask.to(dtype=dtype))
 
     if not output_images:
         raise RuntimeError(f"No loadable image frames found: {path}")
@@ -381,14 +399,14 @@ def _image_to_pil(image: torch.Tensor, mask: torch.Tensor | None) -> Image.Image
         alpha = (1.0 - _resize_mask(mask, width, height).numpy()).clip(0, 1)
         alpha = (alpha * 255.0).clip(0, 255).astype(np.uint8)
         rgba = np.dstack((rgb, alpha))
-        return Image.fromarray(rgba, "RGBA")
+        return Image.fromarray(rgba)
 
     if channels >= 4:
         alpha = (image[..., 3].numpy() * 255.0).clip(0, 255).astype(np.uint8)
         rgba = np.dstack((rgb, alpha))
-        return Image.fromarray(rgba, "RGBA")
+        return Image.fromarray(rgba)
 
-    return Image.fromarray(rgb, "RGB")
+    return Image.fromarray(rgb)
 
 
 def _save_pil_image(
@@ -403,10 +421,25 @@ def _save_pil_image(
     if ext not in SAVE_EXTENSIONS:
         raise RuntimeError(f"Unsupported output extension: {path.suffix or '(none)'}")
 
+    metadata_enabled = metadata_enabled and not args.disable_metadata
+    exif_bytes = b""
+    if metadata_enabled and ext in {".jpg", ".webp"}:
+        exif = Image.Exif()
+        if prompt is not None:
+            exif[0x0110] = f"prompt:{json.dumps(prompt)}"
+        if extra_pnginfo is not None:
+            for index, (key, value) in enumerate(extra_pnginfo.items()):
+                exif[0x010F - index] = f"{key}:{json.dumps(value)}"
+        if parameters:
+            exif[0x8769] = {0x9286: b"UNICODE\x00" + parameters.encode("utf-16-be")}
+        exif_bytes = exif.tobytes()
+        if ext == ".jpg" and len(exif_bytes) > 65533:
+            raise RuntimeError("JPG metadata exceeds 65,533 bytes. Use PNG or WebP to keep the full workflow.")
+
     path.parent.mkdir(parents=True, exist_ok=True)
     if ext == ".png":
         metadata = None
-        if metadata_enabled and not args.disable_metadata:
+        if metadata_enabled:
             metadata = PngInfo()
             if parameters:
                 metadata.add_text("parameters", parameters)
@@ -417,9 +450,9 @@ def _save_pil_image(
                     metadata.add_text(key, json.dumps(value))
         img.save(path, pnginfo=metadata, compress_level=4)
     elif ext == ".jpg":
-        img.convert("RGB").save(path, format="JPEG", quality=100, subsampling=0)
+        img.convert("RGB").save(path, format="JPEG", quality=100, subsampling=0, exif=exif_bytes)
     elif ext == ".webp":
-        img.save(path, format="WEBP", lossless=True, quality=100, method=6, exact=True)
+        img.save(path, format="WEBP", lossless=True, quality=100, method=6, exact=True, exif=exif_bytes)
     else:
         raise RuntimeError(f"Unsupported output extension: {path.suffix or '(none)'}")
 
@@ -461,20 +494,14 @@ def _requeue_next(job: dict) -> None:
         return
     _requeued_runs.add(guard_key)
 
-    if len(value) == 6:
-        number, _prompt_id, prompt, extra_data, outputs_to_execute, sensitive = value
-    else:
-        number, _prompt_id, prompt, extra_data, outputs_to_execute = value
-        sensitive = {}
-
-    prompt = copy.deepcopy(prompt)
+    prompt = copy.deepcopy(value[2])
     if node_id not in prompt:
         raise RuntimeError(f"Cannot requeue: folder loader node {node_id} is not in the prompt.")
     prompt[node_id]["inputs"]["current_index"] = next_index
 
     new_number = -server.PromptServer.instance.number
     server.PromptServer.instance.number += 1
-    queue.put((new_number, str(uuid.uuid4()), prompt, extra_data, outputs_to_execute, sensitive))
+    queue.put((new_number, str(uuid.uuid4()), prompt, *value[3:]))
 
 
 class EasyImageNodesLoadImage:
@@ -486,8 +513,8 @@ class EasyImageNodesLoadImage:
             },
         }
 
-    RETURN_TYPES = ("IMAGE", "MASK", "STRING", "STRING", "STRING", "STRING")
-    RETURN_NAMES = ("IMAGE", "MASK", "filename", "stem", "extension", "relative_path")
+    RETURN_TYPES = ("IMAGE", "MASK", "STRING", "STRING")
+    RETURN_NAMES = ("IMAGE", "MASK", "filename", "extension")
     FUNCTION = "load_image"
     CATEGORY = CATEGORY
 
@@ -499,9 +526,9 @@ class EasyImageNodesLoadImage:
         if path.suffix.lower() not in IMAGE_EXTENSIONS:
             raise RuntimeError(f"Unsupported image extension: {path.suffix}")
 
-        filename, stem, extension, clean_path = _path_metadata(relative_path)
+        _, filename, extension, _ = _path_metadata(relative_path)
         image_tensor, mask_tensor = _load_image_tensor(path)
-        return (image_tensor, mask_tensor, filename, stem, extension, clean_path)
+        return (image_tensor, mask_tensor, filename, extension)
 
     @classmethod
     def IS_CHANGED(cls, image: str):
@@ -528,7 +555,7 @@ class EasyImageNodesLoadImagesFromFolder:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "folder": ("STRING", {"default": "", "multiline": False}),
+                "folder": ("STRING", {"default": "", "multiline": False, "tooltip": "Absolute folder path on the ComfyUI server, or a path relative to ComfyUI input."}),
                 "sort_order": (list(SORT_ORDERS), {"default": "ascending"}),
                 "auto_requeue": ("BOOLEAN", {"default": False}),
                 "start_index": ("INT", {"default": 0, "min": 0, "max": 1_000_000}),
@@ -540,8 +567,8 @@ class EasyImageNodesLoadImagesFromFolder:
             },
         }
 
-    RETURN_TYPES = ("IMAGE", "MASK", "STRING", "STRING", "STRING", "STRING", "INT", "INT", "EASY_IMAGE_JOB")
-    RETURN_NAMES = ("IMAGE", "MASK", "filename", "stem", "extension", "relative_path", "index", "total", "job")
+    RETURN_TYPES = ("IMAGE", "MASK", "STRING", "STRING", "STRING", "EASY_IMAGE_JOB")
+    RETURN_NAMES = ("IMAGE", "MASK", "filename", "extension", "relative_path", "job")
     FUNCTION = "load_image"
     CATEGORY = CATEGORY
 
@@ -555,7 +582,8 @@ class EasyImageNodesLoadImagesFromFolder:
         current_index: int = 0,
         unique_id=None,
     ):
-        files = _list_input_images(folder, sort_order)
+        root = _as_folder_path(folder)
+        files = _list_folder_images(root, sort_order)
         effective_index = max(int(start_index), int(current_index))
         if effective_index >= len(files):
             raise RuntimeError(
@@ -567,12 +595,12 @@ class EasyImageNodesLoadImagesFromFolder:
             )
 
         relative_path = files[effective_index]
-        path = _as_input_path(f"{_clean_relative_path(folder, 'folder')}/{relative_path}")
-        filename, stem, extension, clean_path = _path_metadata(relative_path)
+        path = _as_folder_image_path(root, relative_path)
+        _, filename, extension, clean_path = _path_metadata(relative_path)
         image_tensor, mask_tensor = _load_image_tensor(path)
         job = {
             "node_id": str(unique_id) if unique_id is not None else "",
-            "folder": _clean_relative_path(folder, "folder"),
+            "folder": root.as_posix(),
             "relative_path": clean_path,
             "sort_order": _normalize_sort_order(sort_order),
             "index": effective_index,
@@ -585,11 +613,8 @@ class EasyImageNodesLoadImagesFromFolder:
             image_tensor,
             mask_tensor,
             filename,
-            stem,
             extension,
             clean_path,
-            effective_index,
-            len(files),
             job,
         )
 
@@ -602,13 +627,15 @@ class EasyImageNodesLoadImagesFromFolder:
         start_index: int = 0,
         max_images: int = 0,
         current_index: int = 0,
+        unique_id=None,
     ):
         try:
-            files = _list_input_images(folder, sort_order)
+            root = _as_folder_path(folder)
+            files = _list_folder_images(root, sort_order)
             effective_index = max(int(start_index), int(current_index))
             if effective_index >= len(files):
                 return "invalid"
-            path = _as_input_path(f"{_clean_relative_path(folder, 'folder')}/{files[effective_index]}")
+            path = _as_folder_image_path(root, files[effective_index])
             return f"{_normalize_sort_order(sort_order)}:{effective_index}:{_hash_file(path)}"
         except Exception:
             return "invalid"
@@ -624,7 +651,7 @@ class EasyImageNodesLoadImagesFromFolder:
         **kwargs,
     ):
         try:
-            files = _list_input_images(folder, sort_order)
+            files = _list_folder_images(_as_folder_path(folder), sort_order)
             effective_index = max(int(start_index), int(current_index))
             if effective_index >= len(files):
                 return f"Image index {effective_index} is outside folder range 0..{len(files) - 1}."
@@ -644,10 +671,9 @@ class EasyImageNodesSaveImage:
         return {
             "required": {
                 "images": ("IMAGE",),
-                "filename": ("STRING", {"default": "", "multiline": False}),
+                "filename": ("STRING", {"default": "", "multiline": False, "tooltip": "Connected: exact filename. Unconnected: formatted auto-number prefix. Leave blank to use the last part of path as the prefix."}),
                 "extension_select": (["png", "jpg", "webp"], {"default": "png"}),
-                "path_enabled": ("BOOLEAN", {"default": False}),
-                "path": ("STRING", {"default": "", "multiline": False}),
+                "path": ("STRING", {"default": "", "multiline": False, "tooltip": "Supports %date:yyyy-MM-dd%, %width%, %height%, and %Node.parameter%. With no filename, the last part is the auto-number prefix; end with / to keep it as a folder."}),
             },
             "optional": {
                 "exif_enabled": ("BOOLEAN", {"default": True}),
@@ -674,7 +700,6 @@ class EasyImageNodesSaveImage:
         images: torch.Tensor,
         filename: str,
         extension_select: str,
-        path_enabled: bool,
         path: str,
         exif_enabled: bool = True,
         positive: str = "",
@@ -691,29 +716,34 @@ class EasyImageNodesSaveImage:
         if mask is not None and mask.ndim >= 3 and mask.shape[0] > 1:
             mask = mask[:1]
 
+        image_width, image_height = int(images.shape[2]), int(images.shape[1])
+        formatted_path = _expand_filename_format(path, image_width, image_height, prompt, extra_pnginfo)
+        output_folder = _clean_optional_output_folder(formatted_path)
+        linked_filename = _is_linked_prompt_input(prompt, unique_id, "filename")
+        if not linked_filename:
+            filename_prefix = _expand_filename_format(filename, image_width, image_height, prompt, extra_pnginfo)
+            if not filename_prefix.strip() and output_folder and not formatted_path.strip().replace("\\", "/").endswith("/"):
+                prefix_path = PurePosixPath(output_folder)
+                filename_prefix = prefix_path.name
+                output_folder = prefix_path.parent.as_posix() if str(prefix_path.parent) != "." else ""
+
+        output_base = (self.output_dir / output_folder).resolve()
+        if not output_base.is_relative_to(self.output_dir):
+            raise RuntimeError(f"Output path escapes the ComfyUI output directory: {output_folder}")
+
         save_extension = extension or extension_select
-        if _is_linked_prompt_input(prompt, unique_id, "filename"):
+        if linked_filename:
             clean_filename = _replace_path_extension(filename, save_extension)
         else:
             clean_filename = _auto_increment_relative_path(
-                filename,
+                filename_prefix,
                 save_extension,
-                self.output_dir,
-                int(images.shape[2]),
-                int(images.shape[1]),
-                prompt=prompt,
+                output_base,
             )
 
-        output_parts = []
-        if path_enabled:
-            output_folder = _clean_optional_output_folder(path)
-            if output_folder:
-                output_parts.append(output_folder)
-        output_parts.append(clean_filename)
-
-        relative_output = "/".join(output_parts)
+        relative_output = f"{output_folder}/{clean_filename}" if output_folder else clean_filename
         output_path = (self.output_dir / relative_output).resolve()
-        if os.path.commonpath((str(self.output_dir), str(output_path))) != str(self.output_dir):
+        if not output_path.is_relative_to(self.output_dir):
             raise RuntimeError(f"Output path escapes the ComfyUI output directory: {relative_output}")
 
         pil_image = _image_to_pil(images[0], mask)
