@@ -77,6 +77,7 @@ Connect `relative_path` to Easy Save Image's `filename` input to preserve the up
 ### Node: Easy Save Image
 
 Saves images to the ComfyUI `output` folder.
+Both `filename` and `path` support ComfyUI's standard filename formatting.
 
 #### Inputs
 
@@ -170,7 +171,8 @@ ComfyUI Portable에서만 정상 작동 여부 확인을 하였습니다.
 
 ### 노드: Easy Save Image
 
-이미지를 ComfyUI `output` 폴더에 저장합니다.
+이미지를 ComfyUI `output` 폴더에 저장합니다.  
+`filename`과 `path` 둘 다 기본 이미지 저장 포맷 형식을 지원합니다.
 
 #### 입력
 
