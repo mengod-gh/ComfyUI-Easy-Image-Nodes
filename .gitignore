@@ -4,5 +4,6 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.playwright-mcp/
 .DS_Store
 Thumbs.db

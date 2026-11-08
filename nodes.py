@@ -507,9 +507,18 @@ def _requeue_next(job: dict) -> None:
 class EasyImageNodesLoadImage:
     @classmethod
     def INPUT_TYPES(cls):
+        input_dir = Path(folder_paths.get_input_directory())
+        files = sorted(
+            (
+                path.relative_to(input_dir).as_posix()
+                for path in input_dir.rglob("*")
+                if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS
+            ),
+            key=str.casefold,
+        )
         return {
             "required": {
-                "image": ("STRING", {"default": "", "multiline": False}),
+                "image": (files,),
             },
         }
 

@@ -59,13 +59,6 @@ function splitRelativePath(value) {
   };
 }
 
-function refreshNodeSize(node) {
-  requestAnimationFrame(() => {
-    node.setSize([node.size[0], node.computeSize([node.size[0], node.size[1]])[1]]);
-    node.graph?.setDirtyCanvas(true, true);
-  });
-}
-
 function buildInputViewUrl(relativePath) {
   const parts = splitRelativePath(relativePath);
   if (!parts?.filename) {
@@ -110,67 +103,107 @@ function addButton(node, label, callback) {
   return button;
 }
 
-function addImagePreview(node, imageWidget) {
+function addImagePreview(node, name, options = {}) {
   const container = document.createElement("div");
+  container.style.display = "flex";
+  container.style.flexDirection = "column";
   container.style.width = "100%";
+  container.style.height = "100%";
   container.style.overflow = "hidden";
   container.style.borderRadius = "4px";
 
   const img = document.createElement("img");
   img.style.display = "none";
   img.style.width = "100%";
-  img.style.height = "auto";
+  img.style.height = "0";
+  img.style.minHeight = "0";
+  img.style.flex = "1";
   img.style.objectFit = "contain";
   img.draggable = false;
   container.appendChild(img);
 
-  function previewHeight() {
-    if (img.style.display === "none" || !img.naturalWidth || !img.naturalHeight) {
-      return 0;
-    }
-    return Math.max(80, (node.size[0] - 20) * (img.naturalHeight / img.naturalWidth) + 10);
-  }
+  const resolution = document.createElement("div");
+  resolution.style.textAlign = "center";
+  resolution.style.fontSize = "12px";
+  resolution.style.lineHeight = "20px";
+  resolution.style.flex = "0 0 20px";
+  resolution.style.color = "var(--descrip-text, #aaa)";
+  container.appendChild(resolution);
 
-  const previewWidget = node.addDOMWidget("easy_image_preview", "preview", container, {
+  const previewWidget = node.addDOMWidget(name, "preview", container, {
     serialize: false,
     hideOnZoom: false,
-    getMinHeight: previewHeight,
-    getMaxHeight: previewHeight,
-    getValue() {
-      return imageWidget.value;
-    },
-    setValue(value) {
-      updatePreview(value);
-    },
+    getMinHeight: () => 100,
+    ...options,
   });
+  previewWidget.serialize = false;
 
-  previewWidget.computeSize = function (width) {
-    return [width, previewHeight() || -4];
-  };
-
-  function updatePreview(value) {
-    const url = buildInputViewUrl(value);
+  function updatePreview(url) {
+    resolution.textContent = "";
     if (!url) {
       img.removeAttribute("src");
       img.style.display = "none";
-      refreshNodeSize(node);
+      node.graph?.setDirtyCanvas(true, true);
       return;
     }
     img.style.display = "block";
     img.src = url;
   }
 
-  img.onload = () => refreshNodeSize(node);
+  img.onload = () => {
+    resolution.textContent = `${img.naturalWidth}x${img.naturalHeight}`;
+    node.graph?.setDirtyCanvas(true, true);
+  };
   img.onerror = () => {
+    resolution.textContent = "";
     img.removeAttribute("src");
     img.style.display = "none";
-    refreshNodeSize(node);
+    node.graph?.setDirtyCanvas(true, true);
   };
 
-  chainCallback(imageWidget, "callback", function (value) {
-    updatePreview(value);
+  return updatePreview;
+}
+
+function addInputImagePreview(node, imageWidget) {
+  const updatePreview = addImagePreview(node, "easy_image_preview", {
+    getValue() {
+      return imageWidget.value;
+    },
+    setValue(value) {
+      updatePreview(buildInputViewUrl(value));
+    },
   });
-  updatePreview(imageWidget.value);
+  chainCallback(imageWidget, "callback", function (value) {
+    updatePreview(buildInputViewUrl(value));
+  });
+  chainCallback(node, "onConfigure", function () {
+    updatePreview(buildInputViewUrl(imageWidget.value));
+  });
+  updatePreview(buildInputViewUrl(imageWidget.value));
+}
+
+function addOutputImagePreview(node) {
+  // Reuse the native preview slot so ComfyUI does not add another widget after execution.
+  const widgetName = "$$canvas-image-preview";
+  const updatePreview = addImagePreview(node, widgetName);
+  getWidget(node, widgetName).element.addEventListener("contextmenu", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    app.canvas.adjustMouseEvent(event);
+    app.canvas.processContextMenu(node, event);
+  });
+  let currentImage;
+  chainCallback(node, "onDrawBackground", function () {
+    const image = this.imgs?.[this.imageIndex ?? 0];
+    if (image === currentImage) {
+      return;
+    }
+    currentImage = image;
+    if (image) {
+      this.imageIndex ??= 0;
+    }
+    updatePreview(image?.src || "");
+  });
 }
 
 function addSingleImageUpload(node) {
@@ -178,8 +211,6 @@ function addSingleImageUpload(node) {
   if (!imageWidget) {
     return;
   }
-
-  addImagePreview(node, imageWidget);
 
   const fileInput = document.createElement("input");
   fileInput.type = "file";
@@ -192,6 +223,8 @@ function addSingleImageUpload(node) {
     fileInput.value = "";
     fileInput.click();
   });
+
+  addInputImagePreview(node, imageWidget);
 
   fileInput.onchange = async () => {
     const file = fileInput.files?.[0];
@@ -343,6 +376,7 @@ app.registerExtension({
     if (nodeData?.name === "EasyImageNodes_SaveImage") {
       chainCallback(nodeType.prototype, "onNodeCreated", function () {
         migrateSaveImageSlots(this);
+        addOutputImagePreview(this);
       });
       const configure = nodeType.prototype.configure;
       nodeType.prototype.configure = function (info, ...args) {
